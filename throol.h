@@ -1,135 +1,142 @@
-#ifndef __THROOL_H__
-#define __THROOL_H__
+#ifndef THROOL_H
+#define THROOL_H
 
 #include <pthread.h>
 
-typedef void (*throol_fn_t)(void *args);
+typedef void (*ThroolFn)(void *args);
 
-typedef struct throol_task_t {
-  throol_fn_t task_fn;
+typedef struct ThroolTask {
+  ThroolFn task_fn;
   void *args;
-} throol_task_t;
+} ThroolTask;
 
-#ifndef MAX_TASKS
-#define MAX_TASKS 32
-#endif // !MAX_TASKS
+#ifndef THROOL_MAX_TASKS
+#define THROOL_MAX_TASKS 32
+#endif
 
-typedef struct throol_t {
-  int nthreads;
+typedef struct Throol {
+  int thread_count;
   pthread_t *threads;
 
-  int ntasks;
-  throol_task_t task_stack[MAX_TASKS];
+  int task_count;
+  ThroolTask task_stack[THROOL_MAX_TASKS];
 
   pthread_mutex_t mutex;
-  pthread_cond_t cond_wake;
-  pthread_cond_t cond_wait;
+  pthread_cond_t wake_cond;
+  pthread_cond_t wait_cond;
 
   int shutdown;
-} throol_t;
+} Throol;
 
-throol_t *throol_create(int nthreads);
-int throol_add_task(throol_t *thrl, throol_task_t task);
-int throol_wait(throol_t *thrl);
-int throol_destroy(throol_t *thrl);
-
-#endif // !__THROOL_H__
-
+// Memory management macros
 #ifndef THROOL_ALLOC
 #include <stdlib.h>
-#define THROOL_ALLOC(n, size) (calloc(n, size));
+#define THROOL_ALLOC(n, size) (calloc(n, size))
 #endif // !THROOL_ALLOC
+#ifndef THROOL_FREE
+#include <stdlib.h>
+#define THROOL_FREE(ptr) (free(ptr))
+#endif // !THROOL_FREE
+
+Throol *throol_create(int thread_count);
+int throol_add_task(Throol *throol, ThroolTask task);
+int throol_wait(Throol *throol);
+int throol_destroy(Throol *throol);
+
+#endif // !THROOL_H
 
 #ifdef THROOL_IMPLEMENTATION
 
-void *idle_thread(void *args) {
-  throol_t *thrl = (throol_t *)args;
+static void *throol_thread_func(void *args) {
+  Throol *throol = (Throol *)args;
 
   while (1) {
-    pthread_mutex_lock(&thrl->mutex);
+    pthread_mutex_lock(&throol->mutex);
 
-    while (!thrl->shutdown && thrl->ntasks == 0) {
-      pthread_cond_wait(&thrl->cond_wake, &thrl->mutex);
+    while (!throol->shutdown && throol->task_count == 0) {
+      pthread_cond_wait(&throol->wake_cond, &throol->mutex);
     }
-    if (thrl->shutdown) {
-      pthread_mutex_unlock(&thrl->mutex);
+    if (throol->shutdown) {
+      pthread_mutex_unlock(&throol->mutex);
       break;
     }
 
-    int idx = thrl->ntasks - 1;
-    throol_fn_t fn = thrl->task_stack[idx].task_fn;
-    void *args = thrl->task_stack[idx].args;
-    thrl->ntasks--;
-    fn(args);
+    int idx = throol->task_count - 1;
+    ThroolFn fn = throol->task_stack[idx].task_fn;
+    void *task_args = throol->task_stack[idx].args;
+    throol->task_count--;
 
-    pthread_cond_signal(&thrl->cond_wait);
-    pthread_mutex_unlock(&thrl->mutex);
+    pthread_cond_signal(&throol->wait_cond);
+    pthread_mutex_unlock(&throol->mutex);
+
+    fn(task_args);
   }
 
   return NULL;
 }
 
-throol_t *throol_create(int nthreads) {
-  throol_t *thrl = THROOL_ALLOC(1, sizeof(throol_t));
+Throol *throol_create(int thread_count) {
+  Throol *throol = THROOL_ALLOC(1, sizeof(Throol));
 
-  thrl->nthreads = nthreads;
-  thrl->threads = (pthread_t *)THROOL_ALLOC(nthreads, sizeof(pthread_t));
-  thrl->ntasks = 0;
+  throol->thread_count = thread_count;
+  throol->threads = (pthread_t *)THROOL_ALLOC(thread_count, sizeof(pthread_t));
+  throol->task_count = 0;
 
-  pthread_mutex_init(&thrl->mutex, NULL);
-  pthread_cond_init(&thrl->cond_wake, NULL);
-  pthread_cond_init(&thrl->cond_wait, NULL);
+  pthread_mutex_init(&throol->mutex, NULL);
+  pthread_cond_init(&throol->wake_cond, NULL);
+  pthread_cond_init(&throol->wait_cond, NULL);
 
-  thrl->shutdown = 0;
+  throol->shutdown = 0;
 
-  for (int i = 0; i < nthreads; i++) {
-    pthread_create(&thrl->threads[i], NULL, idle_thread, thrl);
+  for (int i = 0; i < thread_count; i++) {
+    pthread_create(&throol->threads[i], NULL, throol_thread_func, throol);
   }
 
-  return thrl;
+  return throol;
 }
 
-int throol_add_task(throol_t *thrl, throol_task_t task) {
-  pthread_mutex_lock(&thrl->mutex);
-  if (thrl->ntasks + 1 > MAX_TASKS) {
+int throol_add_task(Throol *throol, ThroolTask task) {
+  pthread_mutex_lock(&throol->mutex);
+  if (throol->task_count + 1 > THROOL_MAX_TASKS) {
     return -1;
   }
 
-  thrl->task_stack[thrl->ntasks] = task;
-  thrl->ntasks += 1;
+  throol->task_stack[throol->task_count] = task;
+  throol->task_count += 1;
 
-  pthread_cond_broadcast(&thrl->cond_wake);
-  pthread_mutex_unlock(&thrl->mutex);
+  pthread_cond_broadcast(&throol->wake_cond);
+  pthread_mutex_unlock(&throol->mutex);
   return 0;
 }
 
-int throol_wait(throol_t *thrl) {
-  pthread_mutex_lock(&thrl->mutex);
+int throol_wait(Throol *throol) {
+  pthread_mutex_lock(&throol->mutex);
 
-  while (thrl->ntasks > 0) {
-    pthread_cond_wait(&thrl->cond_wait, &thrl->mutex);
+  while (throol->task_count > 0) {
+    pthread_cond_wait(&throol->wait_cond, &throol->mutex);
   }
 
-  pthread_mutex_unlock(&thrl->mutex);
+  pthread_mutex_unlock(&throol->mutex);
   return 0;
 }
 
-int throol_destroy(throol_t *thrl) {
-  pthread_mutex_lock(&thrl->mutex);
-  thrl->shutdown = 1;
-  pthread_cond_broadcast(&thrl->cond_wake);
-  pthread_mutex_unlock(&thrl->mutex);
+int throol_destroy(Throol *throol) {
+  pthread_mutex_lock(&throol->mutex);
+  throol->shutdown = 1;
+  pthread_cond_broadcast(&throol->wake_cond);
+  pthread_mutex_unlock(&throol->mutex);
 
-  for (int i = 0; i < thrl->nthreads; i++) {
-    pthread_join(thrl->threads[i], NULL);
+  for (int i = 0; i < throol->thread_count; i++) {
+    pthread_join(throol->threads[i], NULL);
   }
 
-  pthread_mutex_destroy(&thrl->mutex);
-  pthread_cond_destroy(&thrl->cond_wait);
-  pthread_cond_destroy(&thrl->cond_wake);
+  pthread_mutex_destroy(&throol->mutex);
+  pthread_cond_destroy(&throol->wait_cond);
+  pthread_cond_destroy(&throol->wake_cond);
 
-  free(thrl->threads);
-  free(thrl);
+  THROOL_FREE(throol->threads);
+  THROOL_FREE(throol);
+  return 0;
 }
 
 #endif // !THROOL_IMPLEMENTATION
