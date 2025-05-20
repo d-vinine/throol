@@ -1,23 +1,6 @@
 #ifndef THROOL_H
 #define THROOL_H
 
-#include <pthread.h>
-
-/**
- * @typedef ThroolFn
- * @brief Function pointer type for tasks to be executed by the thread pool.
- * @param args Pointer to the arguments passed to the task function.
- */
-typedef void (*ThroolFn)(void *args);
-
-/**
- * @struct ThroolTask
- * @brief Structure representing a task to be executed by the thread pool.
- */
-typedef struct ThroolTask {
-  ThroolFn task_fn;  /**< Function to be executed */
-  void *args;        /**< Arguments to be passed to the function */
-} ThroolTask;
 
 #ifndef THROOL_MAX_TASKS
 /**
@@ -26,27 +9,7 @@ typedef struct ThroolTask {
  * @note This value can be overridden by defining it before including this header.
  */
 #define THROOL_MAX_TASKS 32
-#endif
-
-/**
- * @struct Throol
- * @brief The main thread pool structure.
- */
-typedef struct Throol {
-  int thread_count;            /**< Number of worker threads in the pool */
-  pthread_t *threads;          /**< Array of worker thread handles */
-
-  int task_count;              /**< Current number of tasks in the queue */
-  int task_q_head;             /**< Index of the next task to be processed */
-  int task_q_tail;             /**< Index where the next task will be added */
-  ThroolTask task_q[THROOL_MAX_TASKS]; /**< Circular buffer for tasks */
-
-  pthread_mutex_t mutex;       /**< Mutex for thread synchronization */
-  pthread_cond_t wake_cond;    /**< Condition variable to wake worker threads */
-  pthread_cond_t wait_cond;    /**< Condition variable for waiting on empty queue */
-
-  int shutdown;                /**< Flag indicating shutdown in progress */
-} Throol;
+#endif // !THROOL_MAX_TASKS
 
 // Memory management macros
 #ifndef THROOL_ALLOC
@@ -68,6 +31,47 @@ typedef struct Throol {
  */
 #define THROOL_FREE(ptr) (free(ptr))
 #endif // !THROOL_FREE
+
+
+#include <pthread.h>
+
+/**
+ * @typedef ThroolFn
+ * @brief Function pointer type for tasks to be executed by the thread pool.
+ * @param args Pointer to the arguments passed to the task function.
+ */
+typedef void (*ThroolFn)(void *args);
+
+/**
+ * @struct ThroolTask
+ * @brief Structure representing a task to be executed by the thread pool.
+ */
+typedef struct ThroolTask {
+  ThroolFn task_fn;  /**< Function to be executed */
+  void *args;        /**< Arguments to be passed to the function */
+} ThroolTask;
+
+
+/**
+ * @struct Throol
+ * @brief The main thread pool structure.
+ */
+typedef struct Throol {
+  int thread_count;            /**< Number of worker threads in the pool */
+  pthread_t *threads;          /**< Array of worker thread handles */
+
+  int task_count;              /**< Current number of tasks in the queue */
+  int task_q_head;             /**< Index of the next task to be processed */
+  int task_q_tail;             /**< Index where the next task will be added */
+  ThroolTask task_q[THROOL_MAX_TASKS]; /**< Circular buffer for tasks */
+
+  pthread_mutex_t mutex;       /**< Mutex for thread synchronization */
+  pthread_cond_t wake_cond;    /**< Condition variable to wake worker threads */
+  pthread_cond_t wait_cond;    /**< Condition variable for waiting on empty queue */
+
+  int shutdown;                /**< Flag indicating shutdown in progress */
+} Throol;
+
 
 /**
  * @brief Creates a new thread pool with the specified number of worker threads.
