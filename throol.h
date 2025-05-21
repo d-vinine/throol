@@ -1,11 +1,3 @@
-/**
- * @file throol.h
- * @brief A lightweight thread pool implementation in C
- * @details This header provides a thread pool implementation that manages
- *          a pool of worker threads and a task queue. It supports task
- *          submission, waiting for task completion, and graceful shutdown.
- */
-
 #ifndef THROOL_H
 #define THROOL_H
 
@@ -108,7 +100,7 @@ Throol *throol_create(int thread_count);
  * @param throol Thread pool instance
  * @param task Task to be added
  * @return 0 on success, -1 on error
- * @note Tasks execute in FIFO order
+ * @note Tasks are queued in FIFO order. Execution in the same order isn't gauranteed.
  */
 int throol_add_task(Throol *throol, ThroolTask task);
 
