@@ -1,23 +1,27 @@
+/**
+ * @file throol.h
+ * @brief A lightweight thread pool implementation in C
+ * @details This header provides a thread pool implementation that manages
+ *          a pool of worker threads and a task queue. It supports task
+ *          submission, waiting for task completion, and graceful shutdown.
+ */
+
 #ifndef THROOL_H
 #define THROOL_H
 
+// =============================================
+// Memory Management Configuration
+// =============================================
 
-#ifndef THROOL_MAX_TASKS
-/**
- * @def THROOL_MAX_TASKS
- * @brief Maximum number of tasks that can be queued in the thread pool.
- * @note This value can be overridden by defining it before including this header.
- */
-#define THROOL_MAX_TASKS 32
-#endif // !THROOL_MAX_TASKS
-
-// Memory management macros
 #ifndef THROOL_ALLOC
 #include <stdlib.h>
 /**
- * @def THROOL_ALLOC
- * @brief Memory allocation macro used by the thread pool.
- * @note This can be overridden to use a custom allocator.
+ * @def THROOL_ALLOC(n, size)
+ * @brief Memory allocation macro used by the thread pool
+ * @param n Number of elements to allocate
+ * @param size Size of each element
+ * @return Pointer to allocated memory, or NULL on failure
+ * @note Can be overridden to use custom memory allocators
  */
 #define THROOL_ALLOC(n, size) (calloc(n, size))
 #endif // !THROOL_ALLOC
@@ -25,272 +29,326 @@
 #ifndef THROOL_FREE
 #include <stdlib.h>
 /**
- * @def THROOL_FREE
- * @brief Memory deallocation macro used by the thread pool.
- * @note This can be overridden to use a custom deallocator.
+ * @def THROOL_FREE(ptr)
+ * @brief Memory deallocation macro used by the thread pool
+ * @param ptr Pointer to memory to free
+ * @note Can be overridden to use custom memory deallocators
  */
 #define THROOL_FREE(ptr) (free(ptr))
 #endif // !THROOL_FREE
 
-
 #include <pthread.h>
+
+// =============================================
+// Type Definitions
+// =============================================
 
 /**
  * @typedef ThroolFn
- * @brief Function pointer type for tasks to be executed by the thread pool.
- * @param args Pointer to the arguments passed to the task function.
+ * @brief Function pointer type for tasks executed by the thread pool
+ * @param args Pointer to task arguments
  */
 typedef void (*ThroolFn)(void *args);
 
 /**
  * @struct ThroolTask
- * @brief Structure representing a task to be executed by the thread pool.
+ * @brief Represents a single task to be executed by the thread pool
  */
 typedef struct ThroolTask {
-  ThroolFn task_fn;  /**< Function to be executed */
-  void *args;        /**< Arguments to be passed to the function */
+    ThroolFn task_fn;    /**< Function to be executed */
+    void *args;          /**< Arguments passed to the function */
 } ThroolTask;
 
+/**
+ * @struct TaskNode
+ * @brief Node for the task queue linked list
+ */
+typedef struct TaskNode {
+    ThroolTask task;     /**< The task data */
+    struct TaskNode *next; /**< Pointer to next node in queue */
+} TaskNode;
 
 /**
  * @struct Throol
- * @brief The main thread pool structure.
+ * @brief Main thread pool structure
  */
 typedef struct Throol {
-  int thread_count;            /**< Number of worker threads in the pool */
-  pthread_t *threads;          /**< Array of worker thread handles */
-
-  int task_count;              /**< Current number of tasks in the queue */
-  int task_q_head;             /**< Index of the next task to be processed */
-  int task_q_tail;             /**< Index where the next task will be added */
-  ThroolTask task_q[THROOL_MAX_TASKS]; /**< Circular buffer for tasks */
-
-  pthread_mutex_t mutex;       /**< Mutex for thread synchronization */
-  pthread_cond_t wake_cond;    /**< Condition variable to wake worker threads */
-  pthread_cond_t wait_cond;    /**< Condition variable for waiting on empty queue */
-
-  int shutdown;                /**< Flag indicating shutdown in progress */
+    // Thread management
+    int thread_count;     /**< Number of worker threads */
+    pthread_t *threads;   /**< Array of worker thread handles */
+    
+    // Task queue
+    int task_count;       /**< Current number of queued tasks */
+    TaskNode *head;       /**< Front of task queue */
+    TaskNode *tail;       /**< Back of task queue */
+    
+    // Synchronization
+    pthread_mutex_t mutex;      /**< Mutex for thread synchronization */
+    pthread_cond_t wake_cond;   /**< Condition to wake worker threads */
+    pthread_cond_t wait_cond;   /**< Condition for waiting on empty queue */
+    
+    // State
+    int shutdown;         /**< Flag indicating shutdown status */
 } Throol;
 
+// =============================================
+// Public API
+// =============================================
 
 /**
- * @brief Creates a new thread pool with the specified number of worker threads.
- *
- * @param thread_count The number of worker threads to create.
- * @return Pointer to the newly created thread pool, or NULL if creation failed.
- *
- * @note The caller is responsible for eventually destroying the thread pool
- *       using throol_destroy() to prevent resource leaks.
+ * @brief Creates a new thread pool
+ * @param thread_count Number of worker threads to create
+ * @return Pointer to new thread pool, NULL on failure
+ * @note Caller must destroy pool with throol_destroy()
  */
 Throol *throol_create(int thread_count);
 
 /**
- * @brief Adds a task to the thread pool for execution.
- *
- * @param throol Pointer to the thread pool.
- * @param task The task to be added to the queue.
- * @return 0 on success, -1 if the task queue is full.
- *
- * @note Tasks are executed in FIFO (First In, First Out) order.
+ * @brief Adds a task to the thread pool
+ * @param throol Thread pool instance
+ * @param task Task to be added
+ * @return 0 on success, -1 on error
+ * @note Tasks execute in FIFO order
  */
 int throol_add_task(Throol *throol, ThroolTask task);
 
 /**
- * @brief Waits until all queued tasks in the thread pool have completed.
- *
- * @param throol Pointer to the thread pool.
- * @return 0 on success, -1 on error.
- *
- * @note This function blocks the calling thread until the task queue is empty.
+ * @brief Waits for all queued tasks to complete
+ * @param throol Thread pool instance
+ * @return 0 on success, -1 on error
+ * @note Blocks calling thread until queue is empty
  */
 int throol_wait(Throol *throol);
 
 /**
- * @brief Destroys the thread pool and releases all associated resources.
- *
- * @param throol Pointer to the thread pool.
- * @return 0 on success, -1 on error.
- *
- * @note This function signals all worker threads to terminate and waits for them
- *       to finish before destroying the thread pool. No new tasks should be added
- *       after calling this function.
+ * @brief Destroys the thread pool
+ * @param throol Thread pool instance
+ * @return 0 on success, -1 on error
+ * @note Signals all threads to terminate and cleans up resources
  */
 int throol_destroy(Throol *throol);
 
-#endif // !THROOL_H
+#endif // THROOL_H
+
+// =============================================
+// Implementation
+// =============================================
 
 #ifdef THROOL_IMPLEMENTATION
 
 /**
- * @brief Internal function executed by each worker thread.
- *
- * This function continuously pulls tasks from the queue and executes them
- * until the thread pool is shut down.
- *
- * @param args Pointer to the thread pool.
- * @return Always returns NULL.
+ * @brief Worker thread function
+ * @param args Pointer to Throol instance
+ * @return NULL
+ * @details Continuously processes tasks from queue until shutdown
  */
 static void *throol_thread_func(void *args) {
-  Throol *throol = (Throol *)args;
+    Throol *throol = (Throol *)args;
 
-  while (1) {
+    while (1) {
+        pthread_mutex_lock(&throol->mutex);
+
+        // Wait for tasks or shutdown
+        while (!throol->shutdown && throol->task_count == 0) {
+            pthread_cond_wait(&throol->wake_cond, &throol->mutex);
+        }
+
+        // Check for shutdown
+        if (throol->shutdown) {
+            pthread_mutex_unlock(&throol->mutex);
+            break;
+        }
+
+        // Get next task
+        ThroolFn fn = throol->head->task.task_fn;
+        void *task_args = throol->head->task.args;
+
+        // Remove task from queue
+        TaskNode *tmp = throol->head->next;
+        THROOL_FREE(throol->head);
+        throol->head = tmp;
+        throol->task_count--;
+
+        // Notify waiters if queue is empty
+        if (throol->task_count == 0) {
+            pthread_cond_signal(&throol->wait_cond);
+        }
+
+        pthread_mutex_unlock(&throol->mutex);
+
+        // Execute task (without holding lock)
+        fn(task_args);
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Creates a new thread pool
+ */
+Throol *throol_create(int thread_count) {
+    if (thread_count <= 0) {
+        return NULL;
+    }
+
+    // Allocate main structure
+    Throol *throol = THROOL_ALLOC(1, sizeof(Throol));
+    if (!throol) {
+        return NULL;
+    }
+
+    // Allocate thread handles
+    throol->threads = (pthread_t *)THROOL_ALLOC(thread_count, sizeof(pthread_t));
+    if (!throol->threads) {
+        THROOL_FREE(throol);
+        return NULL;
+    }
+
+    // Initialize fields
+    throol->thread_count = thread_count;
+    throol->task_count = 0;
+    throol->head = NULL;
+    throol->tail = NULL;
+    throol->shutdown = 0;
+
+    // Initialize synchronization primitives
+    if (pthread_mutex_init(&throol->mutex, NULL) != 0) {
+        THROOL_FREE(throol->threads);
+        THROOL_FREE(throol);
+        return NULL;
+    }
+
+    if (pthread_cond_init(&throol->wake_cond, NULL) != 0) {
+        pthread_mutex_destroy(&throol->mutex);
+        THROOL_FREE(throol->threads);
+        THROOL_FREE(throol);
+        return NULL;
+    }
+
+    if (pthread_cond_init(&throol->wait_cond, NULL) != 0) {
+        pthread_cond_destroy(&throol->wake_cond);
+        pthread_mutex_destroy(&throol->mutex);
+        THROOL_FREE(throol->threads);
+        THROOL_FREE(throol);
+        return NULL;
+    }
+
+    // Create worker threads
+    for (int i = 0; i < thread_count; i++) {
+        if (pthread_create(&throol->threads[i], NULL, throol_thread_func, throol) != 0) {
+            // Clean up on failure
+            throol->shutdown = 1;
+            pthread_cond_broadcast(&throol->wake_cond);
+
+            // Wait for created threads to exit
+            for (int j = 0; j < i; j++) {
+                pthread_join(throol->threads[j], NULL);
+            }
+
+            // Release resources
+            pthread_cond_destroy(&throol->wait_cond);
+            pthread_cond_destroy(&throol->wake_cond);
+            pthread_mutex_destroy(&throol->mutex);
+            THROOL_FREE(throol->threads);
+            THROOL_FREE(throol);
+            return NULL;
+        }
+    }
+
+    return throol;
+}
+
+/**
+ * @brief Adds a task to the thread pool
+ */
+int throol_add_task(Throol *throol, ThroolTask task) {
+    if (!throol || !task.task_fn) {
+        return -1;
+    }
+
     pthread_mutex_lock(&throol->mutex);
 
-    while (!throol->shutdown && throol->task_count == 0) {
-      pthread_cond_wait(&throol->wake_cond, &throol->mutex);
-    }
-    if (throol->shutdown) {
-      pthread_mutex_unlock(&throol->mutex);
-      break;
+    // Create new task node
+    TaskNode *new_node = THROOL_ALLOC(1, sizeof(TaskNode));
+    if (!new_node) {
+        pthread_mutex_unlock(&throol->mutex);
+        return -1;
     }
 
-    int idx = throol->task_q_head;
-    ThroolFn fn = throol->task_q[idx].task_fn;
-    void *task_args = throol->task_q[idx].args;
-    throol->task_count--;
-    throol->task_q_head = (throol->task_q_head + 1) % THROOL_MAX_TASKS;
+    new_node->task = task;
+    new_node->next = NULL;
 
-    pthread_cond_signal(&throol->wait_cond);
+    // Add to queue
+    if (throol->task_count == 0) {
+        throol->head = new_node;
+        throol->tail = new_node;
+    } else {
+        throol->tail->next = new_node;
+        throol->tail = new_node;
+    }
+    throol->task_count++;
+
+    // Wake a worker thread
+    pthread_cond_signal(&throol->wake_cond);
     pthread_mutex_unlock(&throol->mutex);
-
-    fn(task_args);
-  }
-
-  return NULL;
+    
+    return 0;
 }
 
-Throol *throol_create(int thread_count) {
-  if (thread_count <= 0) {
-    return NULL;
-  }
-
-  Throol *throol = THROOL_ALLOC(1, sizeof(Throol));
-  if (!throol) {
-    return NULL;
-  }
-
-  throol->threads = (pthread_t *)THROOL_ALLOC(thread_count, sizeof(pthread_t));
-  if (!throol->threads) {
-    THROOL_FREE(throol);
-    return NULL;
-  }
-
-  throol->thread_count = thread_count;
-  throol->task_count = 0;
-  throol->task_q_tail = 0;
-  throol->task_q_head = 0;
-
-  if (pthread_mutex_init(&throol->mutex, NULL) != 0) {
-    THROOL_FREE(throol->threads);
-    THROOL_FREE(throol);
-    return NULL;
-  }
-
-  if (pthread_cond_init(&throol->wake_cond, NULL) != 0) {
-    pthread_mutex_destroy(&throol->mutex);
-    THROOL_FREE(throol->threads);
-    THROOL_FREE(throol);
-    return NULL;
-  }
-
-  if (pthread_cond_init(&throol->wait_cond, NULL) != 0) {
-    pthread_cond_destroy(&throol->wake_cond);
-    pthread_mutex_destroy(&throol->mutex);
-    THROOL_FREE(throol->threads);
-    THROOL_FREE(throol);
-    return NULL;
-  }
-
-  throol->shutdown = 0;
-
-  // Create worker threads
-  for (int i = 0; i < thread_count; i++) {
-    if (pthread_create(&throol->threads[i], NULL, throol_thread_func, throol) != 0) {
-      // Clean up on failure
-      throol->shutdown = 1;
-      pthread_cond_broadcast(&throol->wake_cond);
-      
-      // Wait for any created threads to exit
-      for (int j = 0; j < i; j++) {
-        pthread_join(throol->threads[j], NULL);
-      }
-      
-      pthread_cond_destroy(&throol->wait_cond);
-      pthread_cond_destroy(&throol->wake_cond);
-      pthread_mutex_destroy(&throol->mutex);
-      THROOL_FREE(throol->threads);
-      THROOL_FREE(throol);
-      return NULL;
-    }
-  }
-
-  return throol;
-}
-
-int throol_add_task(Throol *throol, ThroolTask task) {
-  if (!throol || !task.task_fn) {
-    return -1;
-  }
-
-  pthread_mutex_lock(&throol->mutex);
-  
-  // Check if task queue is full
-  if (throol->task_count >= THROOL_MAX_TASKS) {
-    pthread_mutex_unlock(&throol->mutex);
-    return -1;
-  }
-
-  // Add task to queue
-  throol->task_q[throol->task_q_tail] = task;
-  throol->task_q_tail = (throol->task_q_tail + 1) % THROOL_MAX_TASKS;
-  throol->task_count++;
-
-  // Wake up one worker thread
-  pthread_cond_signal(&throol->wake_cond);
-  pthread_mutex_unlock(&throol->mutex);
-  return 0;
-}
-
+/**
+ * @brief Waits for all queued tasks to complete
+ */
 int throol_wait(Throol *throol) {
-  if (!throol) {
-    return -1;
-  }
+    if (!throol) {
+        return -1;
+    }
 
-  pthread_mutex_lock(&throol->mutex);
+    pthread_mutex_lock(&throol->mutex);
 
-  // Wait until all tasks are processed
-  while (throol->task_count > 0) {
-    pthread_cond_wait(&throol->wait_cond, &throol->mutex);
-  }
+    while (throol->task_count > 0) {
+        pthread_cond_wait(&throol->wait_cond, &throol->mutex);
+    }
 
-  pthread_mutex_unlock(&throol->mutex);
-  return 0;
+    pthread_mutex_unlock(&throol->mutex);
+    return 0;
 }
 
+/**
+ * @brief Destroys the thread pool
+ */
 int throol_destroy(Throol *throol) {
-  if (!throol) {
-    return -1;
-  }
+    if (!throol) {
+        return -1;
+    }
 
-  // Signal shutdown to all threads
-  pthread_mutex_lock(&throol->mutex);
-  throol->shutdown = 1;
-  pthread_cond_broadcast(&throol->wake_cond);
-  pthread_mutex_unlock(&throol->mutex);
+    // Initiate shutdown
+    pthread_mutex_lock(&throol->mutex);
+    throol->shutdown = 1;
+    pthread_cond_broadcast(&throol->wake_cond);
+    pthread_mutex_unlock(&throol->mutex);
 
-  // Wait for all threads to exit
-  for (int i = 0; i < throol->thread_count; i++) {
-    pthread_join(throol->threads[i], NULL);
-  }
+    // Wait for threads to exit
+    for (int i = 0; i < throol->thread_count; i++) {
+        pthread_join(throol->threads[i], NULL);
+    }
 
-  // Clean up resources
-  pthread_mutex_destroy(&throol->mutex);
-  pthread_cond_destroy(&throol->wait_cond);
-  pthread_cond_destroy(&throol->wake_cond);
+    // Clean up resources
+    pthread_mutex_destroy(&throol->mutex);
+    pthread_cond_destroy(&throol->wait_cond);
+    pthread_cond_destroy(&throol->wake_cond);
 
-  THROOL_FREE(throol->threads);
-  THROOL_FREE(throol);
-  return 0;
+    THROOL_FREE(throol->threads);
+
+    // Free any remaining tasks
+    TaskNode *curr = throol->head;
+    while (curr != NULL) {
+        TaskNode *next = curr->next;
+        THROOL_FREE(curr);
+        curr = next;
+    }
+
+    THROOL_FREE(throol);
+    return 0;
 }
 
-#endif // !THROOL_IMPLEMENTATION
+#endif // THROOL_IMPLEMENTATION
