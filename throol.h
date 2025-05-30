@@ -78,6 +78,7 @@ typedef struct Throol {
     pthread_mutex_t mutex;      /**< Mutex for thread synchronization */
     pthread_cond_t wake_cond;   /**< Condition to wake worker threads */
     pthread_cond_t wait_cond;   /**< Condition for waiting on empty queue */
+    int active_workers;         /**< Number of worker threads currently executing tasks */
     
     // State
     int shutdown;         /**< Flag indicating shutdown status */
@@ -161,15 +162,22 @@ static void *throol_thread_func(void *args) {
         throol->head = tmp;
         throol->task_count--;
 
-        // Notify waiters if queue is empty
-        if (throol->task_count == 0) {
-            pthread_cond_signal(&throol->wait_cond);
-        }
+        throol->active_workers++; 
 
         pthread_mutex_unlock(&throol->mutex);
 
         // Execute task (without holding lock)
         fn(task_args);
+
+
+        // Notify waiters if no active workers and queue is empty
+        
+        pthread_mutex_lock(&throol->mutex);
+        throol->active_workers--;
+        if (throol->task_count == 0 && throol->active_workers == 0) {
+          pthread_cond_broadcast(&throol->wait_cond);
+        }
+        pthread_mutex_unlock(&throol->mutex);
     }
 
     return NULL;
@@ -202,6 +210,7 @@ Throol *throol_create(int thread_count) {
     throol->head = NULL;
     throol->tail = NULL;
     throol->shutdown = 0;
+    throol->active_workers = 0;
 
     // Initialize synchronization primitives
     if (pthread_mutex_init(&throol->mutex, NULL) != 0) {
@@ -297,7 +306,7 @@ int throol_wait(Throol *throol) {
 
     pthread_mutex_lock(&throol->mutex);
 
-    while (throol->task_count > 0) {
+    while (throol->task_count > 0 || throol->active_workers > 0) {
         pthread_cond_wait(&throol->wait_cond, &throol->mutex);
     }
 
